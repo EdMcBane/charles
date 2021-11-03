@@ -171,18 +171,21 @@ type Point3 = Vec3;
 type Color = Vec3;
 
 struct Ray {
-    orig: Point3,
+    origin: Point3,
     dir: Vec3,
 }
 
 impl Ray {
     fn index(&self, t: f32) -> Vec3 {
-        self.orig + self.dir * t
+        self.origin + self.dir * t
     }
 }
 
-fn ray_color(ray: &Ray) -> Color {
-    let unit_dir = ray.dir.unit_vector();
+fn ray_color(r: &Ray) -> Color {
+    if hit_sphere(&Point3::new(0., 0., -1.), 0.5, r) {
+        return Color::new(1., 0., 0.);
+    }
+    let unit_dir = r.dir.unit_vector();
     let t = 0.5 * unit_dir.y() + 1.0;
     (1.0 - t) * Color::new(1., 1., 1.) + t * Color::new(0.5, 0.7, 1.0)
 }
@@ -203,6 +206,15 @@ fn test_image() {
                        0.25).write_color(&mut stdout());
         }
     }
+}
+
+fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> bool {
+    let oc = r.origin - *center;
+    let a = Vec3::dot(&r.dir, &r.dir);
+    let b = 2. * Vec3::dot(&oc, &r.dir);
+    let c = Vec3::dot(&oc, &oc) - radius.powi(2);
+    let discriminant = b*b - 4.*a*c;
+    discriminant > 0.
 }
 
 fn main() {
@@ -228,7 +240,7 @@ fn main() {
             let u = i as f32 / (image_width - 1) as f32;
             let v = j as f32 / (image_height - 1) as f32;
             let ray = Ray {
-                orig: origin,
+                origin: origin,
                 dir: lower_left_corner + u*horizontal + v*vertical - origin,
             };
             let color = ray_color(&ray);
