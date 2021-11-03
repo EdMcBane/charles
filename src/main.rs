@@ -321,7 +321,10 @@ impl Raycaster {
             }
         }
     }
-    
+    fn random_unit_vector(&mut self) -> Vec3{
+        self.random_in_unit_sphere().unit_vector()
+    }
+
 
     fn ray_color<W: Hittable>(&mut self, r: &Ray, world: W, depth: usize) -> Color {
         if depth == 0 {
@@ -329,7 +332,7 @@ impl Raycaster {
         }
         let range = 0.001f64..f64::INFINITY;
         if let Some(rec) = world.hit(r, &range) {
-            let target = rec.p + rec.normal + self.random_in_unit_sphere();
+            let target = rec.p + rec.normal + self.random_unit_vector();
             return 0.5 * self.ray_color(&Ray { origin: rec.p, dir: target - rec.p}, world, depth - 1);
         }
         let unit_dir = r.dir.unit_vector();
