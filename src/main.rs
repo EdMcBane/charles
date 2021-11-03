@@ -1,6 +1,9 @@
-use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div};
+#![feature(total_cmp)]
+
+use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range, Deref};
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
+use std::cmp::Ordering;
 
 
 #[derive(Copy, Clone)]
@@ -183,16 +186,16 @@ impl Ray {
 
 const SPHERE_CENTER: Point3 = Vec3([0., 0., -1.]);
 const SPHERE_RADIUS: f32 = 0.5;
+const COLOR_WHITE: Color = Vec3([1., 1., 1.]);
 
-fn ray_color(r: &Ray) -> Color {
-    let t = hit_sphere(&SPHERE_CENTER, SPHERE_RADIUS, r);
-    if t > 0. {
-        let n = (r.at(t) - SPHERE_CENTER).unit_vector();
-        return 0.5 * Color::new(1. + n.x(), 1. + n.y(), 1. + n.z());
+fn ray_color<W: Hittable>(r: &Ray, world: W) -> Color {
+    let range = 0f32..f32::INFINITY;
+    if let Some(rec) = world.hit(r, &range) {
+        return 0.5 * (rec.normal + COLOR_WHITE);
     }
     let unit_dir = r.dir.unit_vector();
     let t = 0.5 * (unit_dir.y() + 1.0);
-    (1.0 - t) * Color::new(1., 1., 1.) + t * Color::new(0.5, 0.7, 1.0)
+    (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
 }
 
 fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> f32 {
@@ -208,6 +211,72 @@ fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> f32 {
     }
 }
 
+struct HitRecord {
+    p: Point3,
+    normal: Vec3,
+    t: f32,
+    front_face: bool,
+}
+
+impl HitRecord {
+    fn new(t: f32, p: Point3, r: &Ray, outward_normal: Vec3) -> Self {
+        let front_face = Vec3::dot(&r.dir, &outward_normal) < 0.;
+        HitRecord {
+            t,
+            p,
+            front_face,
+            normal: if front_face { outward_normal } else { -outward_normal },
+        }
+    }
+}
+
+trait Hittable {
+    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord>;
+}
+
+struct Sphere {
+    center: Point3,
+    radius: f32,
+}
+impl Hittable for &Sphere {
+    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+        (*self).hit(r, t_range)
+    }
+}
+impl Hittable for Sphere {
+    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+        let oc = r.origin - self.center;
+        let a = r.dir.length_squared();
+        let half_b = Vec3::dot(&oc, &r.dir);
+        let c = oc.length_squared() - self.radius.powi(2);
+        let discriminant = half_b.powi(2) - a * c;
+        if discriminant < 0. {
+            return None;
+        }
+        // nearest acceptable root
+        let sqrtd = discriminant.sqrt();
+        [-1., 1.].into_iter()
+            .map(|sign| (-half_b + sqrtd * sign) / a)
+            .find(|root| t_range.contains(root))
+            .map(|root| {
+                let p = r.at(root);
+                HitRecord::new(root, p, r, (p - self.center) / self.radius)
+            })
+    }
+}
+
+impl Hittable for &Vec<Box<dyn Hittable>> {
+    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+        self.iter()
+            .filter_map(|hittable| hittable.hit(r, t_range))
+            .min_by(|hr1, hr2| hr1.t.total_cmp(&hr2.t))
+    }
+}
+
+fn degrees_to_radians(degrees: f32) -> f32 {
+    degrees * std::f32::consts::PI / 180.
+}
+
 fn main() {
     let aspect_ratio = 16.0 / 9.0;
     let image_width = 400usize;
@@ -216,6 +285,15 @@ fn main() {
     let viewport_height = 2.0;
     let viewport_width = aspect_ratio * viewport_height;
     let focal_length = 1.0;
+    // World
+    let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
+        center: Point3::new(0.,0.,-1.),
+        radius: 0.5,
+    }),Box::new(Sphere {
+        center: Point3::new(0.,-100.5,-1.),
+        radius: 100.,
+    })];
+
     // Camera
     let origin = Point3::new(0., 0., 0.);
     let horizontal = Vec3::new(viewport_width, 0., 0.);
@@ -234,7 +312,7 @@ fn main() {
                 origin: origin,
                 dir: lower_left_corner + u * horizontal + v * vertical - origin,
             };
-            let color = ray_color(&ray);
+            let color = ray_color(&ray, &world);
             color.write_color(&mut stdout());
         }
     }
