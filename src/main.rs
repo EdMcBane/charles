@@ -197,14 +197,14 @@ fn ray_color(r: &Ray) -> Color {
 
 fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> f32 {
     let oc = r.origin - *center;
-    let a = Vec3::dot(&r.dir, &r.dir);
-    let b = 2. * Vec3::dot(&oc, &r.dir);
-    let c = Vec3::dot(&oc, &oc) - radius.powi(2);
-    let discriminant = b * b - 4. * a * c;
+    let a = r.dir.length_squared();
+    let half_b = Vec3::dot(&oc, &r.dir);
+    let c = oc.length_squared() - radius.powi(2);
+    let discriminant = half_b.powi(2) - a * c;
     if discriminant < 0. {
         -1.
     } else {
-        (-b - discriminant.sqrt()) / (2.0 * a)
+        (-half_b - discriminant.sqrt()) / a
     }
 }
 
