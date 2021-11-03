@@ -191,7 +191,7 @@ fn ray_color(r: &Ray) -> Color {
         return 0.5 * Color::new(1. + n.x(), 1. + n.y(), 1. + n.z());
     }
     let unit_dir = r.dir.unit_vector();
-    let t = 0.5 * unit_dir.y() + 1.0;
+    let t = 0.5 * (unit_dir.y() + 1.0);
     (1.0 - t) * Color::new(1., 1., 1.) + t * Color::new(0.5, 0.7, 1.0)
 }
 
