@@ -5,10 +5,13 @@ use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
 use std::cmp::Ordering;
 use rand::Rng;
-
+use rand::rngs::ThreadRng;
+use std::thread::Thread;
+use rand::distributions::Uniform;
+use rand::distributions::Distribution;
 
 #[derive(Copy, Clone)]
-struct Vec3([f32; 3]);
+struct Vec3([f64; 3]);
 
 impl Default for Vec3 {
     fn default() -> Self {
@@ -17,29 +20,29 @@ impl Default for Vec3 {
 }
 
 impl Vec3 {
-    fn new(x: f32, y: f32, z: f32) -> Self {
+    fn new(x: f64, y: f64, z: f64) -> Self {
         Vec3([x, y, z])
     }
 
-    fn x(&self) -> f32 {
+    fn x(&self) -> f64 {
         self.0[0]
     }
-    fn y(&self) -> f32 {
+    fn y(&self) -> f64 {
         self.0[1]
     }
-    fn z(&self) -> f32 {
+    fn z(&self) -> f64 {
         self.0[2]
     }
 
-    fn length_squared(&self) -> f32 {
+    fn length_squared(&self) -> f64 {
         self.0.into_iter().map(|e| e.powi(2)).sum()
     }
 
-    fn length(&self) -> f32 {
+    fn length(&self) -> f64 {
         self.length_squared().sqrt()
     }
 
-    fn dot(&self, rhs: &Self) -> f32 {
+    fn dot(&self, rhs: &Self) -> f64 {
         self.0.into_iter().zip(rhs.0.into_iter()).map(|(l, r)| l * r).sum()
     }
 
@@ -55,11 +58,11 @@ impl Vec3 {
     }
 
     fn write_color<W: Write>(&self, fmt: &mut W, samples_per_pixel: usize) {
-        let scale = 1.0 / samples_per_pixel as f32;
+        let scale = 1.0 / samples_per_pixel as f64;
         writeln!(fmt, "{} {} {}",
-                 (256. * (self.x() * scale).clamp(0., 0.999)) as u8,
-                 (256. * (self.y() * scale).clamp(0., 0.999)) as u8,
-                 (256. * (self.z() * scale).clamp(0., 0.999)) as u8).unwrap();
+                 (256. * (self.x() * scale).sqrt().clamp(0., 0.999)) as u8, // SQRT for gamma correction
+                 (256. * (self.y() * scale).sqrt().clamp(0., 0.999)) as u8,
+                 (256. * (self.z() * scale).sqrt().clamp(0., 0.999)) as u8).unwrap();
     }
 }
 
@@ -73,7 +76,7 @@ impl Neg for Vec3 {
 }
 
 impl Index<usize> for Vec3 {
-    type Output = f32;
+    type Output = f64;
 
     fn index(&self, index: usize) -> &Self::Output {
         self.0.index(index)
@@ -124,7 +127,7 @@ impl Mul<Vec3> for Vec3 {
     }
 }
 
-impl Mul<Vec3> for f32 {
+impl Mul<Vec3> for f64 {
     type Output = Vec3;
 
     fn mul(self, rhs: Vec3) -> Self::Output {
@@ -132,34 +135,34 @@ impl Mul<Vec3> for f32 {
     }
 }
 
-impl Mul<f32> for Vec3 {
+impl Mul<f64> for Vec3 {
     type Output = Vec3;
 
-    fn mul(self, rhs: f32) -> Self::Output {
+    fn mul(self, rhs: f64) -> Self::Output {
         Vec3([self.0[0] * rhs,
             self.0[1] * rhs,
             self.0[2] * rhs])
     }
 }
 
-impl Div<f32> for Vec3 {
+impl Div<f64> for Vec3 {
     type Output = Vec3;
 
-    fn div(self, rhs: f32) -> Self::Output {
+    fn div(self, rhs: f64) -> Self::Output {
         self.mul(1. / rhs)
     }
 }
 
-impl MulAssign<f32> for Vec3 {
-    fn mul_assign(&mut self, t: f32) {
+impl MulAssign<f64> for Vec3 {
+    fn mul_assign(&mut self, t: f64) {
         for l in self.0.iter_mut() {
             *l *= t;
         }
     }
 }
 
-impl DivAssign<f32> for Vec3 {
-    fn div_assign(&mut self, t: f32) {
+impl DivAssign<f64> for Vec3 {
+    fn div_assign(&mut self, t: f64) {
         for l in self.0.iter_mut() {
             *l /= t;
         }
@@ -181,49 +184,29 @@ struct Ray {
 }
 
 impl Ray {
-    fn at(&self, t: f32) -> Vec3 {
+    fn at(&self, t: f64) -> Vec3 {
         self.origin + self.dir * t
     }
 }
 
 const SPHERE_CENTER: Point3 = Vec3([0., 0., -1.]);
-const SPHERE_RADIUS: f32 = 0.5;
+const SPHERE_RADIUS: f64 = 0.5;
 const COLOR_WHITE: Color = Vec3([1., 1., 1.]);
 const COLOR_BLACK: Color = Vec3([0., 0., 0.]);
 
 
-fn ray_color<W: Hittable>(r: &Ray, world: W) -> Color {
-    let range = 0f32..f32::INFINITY;
-    if let Some(rec) = world.hit(r, &range) {
-        return 0.5 * (rec.normal + COLOR_WHITE);
-    }
-    let unit_dir = r.dir.unit_vector();
-    let t = 0.5 * (unit_dir.y() + 1.0);
-    (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
-}
 
-fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> f32 {
-    let oc = r.origin - *center;
-    let a = r.dir.length_squared();
-    let half_b = Vec3::dot(&oc, &r.dir);
-    let c = oc.length_squared() - radius.powi(2);
-    let discriminant = half_b.powi(2) - a * c;
-    if discriminant < 0. {
-        -1.
-    } else {
-        (-half_b - discriminant.sqrt()) / a
-    }
-}
+
 
 struct HitRecord {
     p: Point3,
     normal: Vec3,
-    t: f32,
+    t: f64,
     front_face: bool,
 }
 
 impl HitRecord {
-    fn new(t: f32, p: Point3, r: &Ray, outward_normal: Vec3) -> Self {
+    fn new(t: f64, p: Point3, r: &Ray, outward_normal: Vec3) -> Self {
         let front_face = Vec3::dot(&r.dir, &outward_normal) < 0.;
         HitRecord {
             t,
@@ -235,22 +218,22 @@ impl HitRecord {
 }
 
 trait Hittable {
-    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord>;
+    fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord>;
 }
 
 struct Sphere {
     center: Point3,
-    radius: f32,
+    radius: f64,
 }
 
 impl Hittable for &Sphere {
-    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+    fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
         (*self).hit(r, t_range)
     }
 }
 
 impl Hittable for Sphere {
-    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+    fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
         let oc = r.origin - self.center;
         let a = r.dir.length_squared();
         let half_b = Vec3::dot(&oc, &r.dir);
@@ -272,15 +255,15 @@ impl Hittable for Sphere {
 }
 
 impl Hittable for &Vec<Box<dyn Hittable>> {
-    fn hit(&self, r: &Ray, t_range: &Range<f32>) -> Option<HitRecord> {
+    fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
         self.iter()
             .filter_map(|hittable| hittable.hit(r, t_range))
             .min_by(|hr1, hr2| hr1.t.total_cmp(&hr2.t))
     }
 }
 
-fn degrees_to_radians(degrees: f32) -> f32 {
-    degrees * std::f32::consts::PI / 180.
+fn degrees_to_radians(degrees: f64) -> f64 {
+    degrees * std::f64::consts::PI / 180.
 }
 
 struct Camera {
@@ -307,7 +290,7 @@ impl Camera {
             lower_left_corner: origin - horizontal / 2. - vertical / 2. - Vec3::new(0., 0., focal_length),
         }
     }
-    fn get_ray(&self, u: f32, v: f32) -> Ray {
+    fn get_ray(&self, u: f64, v: f64) -> Ray {
         Ray {
             origin: self.origin,
             dir: self.lower_left_corner + u * self.horizontal + v * self.vertical - self.origin,
@@ -315,39 +298,83 @@ impl Camera {
     }
 }
 
-fn main() {
-    // Image
-    let aspect_ratio = 16.0 / 9.0;
-    let image_width = 400usize;
-    let image_height = (image_width as f32 / aspect_ratio) as usize;
-    let samples_per_pixel = 100;
-    // World
-    let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
-        center: Point3::new(0., 0., -1.),
-        radius: 0.5,
-    }), Box::new(Sphere {
-        center: Point3::new(0., -100.5, -1.),
-        radius: 100.,
-    })];
+struct Raycaster {
+    rng: ThreadRng,
+    unit: Uniform<f64>,
+}
 
-    // Camera
-    let cam = Camera::new();
-    let mut rand = rand::thread_rng();
-    // Render
-    println!("P3");
-    println!("{} {}", image_width, image_height);
-    println!("{}", u8::MAX);
-    for j in (0..image_height).rev() {
-        eprint!("\rScanlines remaining: {}", j);
-        for i in 0..image_width {
-            let mut pixel_color = COLOR_BLACK;
-            for s in 0..samples_per_pixel {
-                let u = (i as f32 + rand.gen_range(0.0..1.0))/ (image_width - 1) as f32;
-                let v = (j as f32 +  rand.gen_range(0.0..1.0))/ (image_height - 1) as f32;
-                let r = cam.get_ray(u, v);
-                pixel_color += ray_color(&r, &world);
-            }
-            pixel_color.write_color(&mut stdout(), samples_per_pixel);
+impl Raycaster {
+    fn new() -> Self {
+        Raycaster {
+            rng: rand::thread_rng(),
+            unit: Uniform::from(-1.0..1.0),
         }
     }
+    fn random_in_unit_sphere(&mut self) -> Vec3 {
+        loop {
+            let p = Vec3::new(
+                self.unit.sample(&mut self.rng),
+                self.unit.sample(&mut self.rng),
+                self.unit.sample(&mut self.rng));
+            if p.length_squared() < 1. {
+                return p
+            }
+        }
+    }
+    
+
+    fn ray_color<W: Hittable>(&mut self, r: &Ray, world: W, depth: usize) -> Color {
+        if depth == 0 {
+            return COLOR_BLACK;
+        }
+        let range = 0.001f64..f64::INFINITY;
+        if let Some(rec) = world.hit(r, &range) {
+            let target = rec.p + rec.normal + self.random_in_unit_sphere();
+            return 0.5 * self.ray_color(&Ray { origin: rec.p, dir: target - rec.p}, world, depth - 1);
+        }
+        let unit_dir = r.dir.unit_vector();
+        let t = 0.5 * (unit_dir.y() + 1.0);
+        (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
+    }
+
+    fn main(&mut self) {
+        // Image
+        let aspect_ratio = 16.0 / 9.0;
+        let image_width = 400usize;
+        let image_height = (image_width as f64 / aspect_ratio) as usize;
+        let samples_per_pixel = 100;
+        let max_depth = 50;
+        // World
+        let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
+            center: Point3::new(0., 0., -1.),
+            radius: 0.5,
+        }), Box::new(Sphere {
+            center: Point3::new(0., -100.5, -1.),
+            radius: 100.,
+        })];
+
+        // Camera
+        let cam = Camera::new();
+        let mut rand = rand::thread_rng();
+        // Render
+        println!("P3");
+        println!("{} {}", image_width, image_height);
+        println!("{}", u8::MAX);
+        for j in (0..image_height).rev() {
+            eprint!("\rScanlines remaining: {}", j);
+            for i in 0..image_width {
+                let mut pixel_color = COLOR_BLACK;
+                for s in 0..samples_per_pixel {
+                    let u = (i as f64 + rand.gen_range(0.0..1.0)) / (image_width - 1) as f64;
+                    let v = (j as f64 + rand.gen_range(0.0..1.0)) / (image_height - 1) as f64;
+                    let r = cam.get_ray(u, v);
+                    pixel_color += self.ray_color(&r, &world, max_depth);
+                }
+                pixel_color.write_color(&mut stdout(), samples_per_pixel);
+            }
+        }
+    }
+}
+fn main() {
+    Raycaster::new().main()
 }
