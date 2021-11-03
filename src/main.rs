@@ -176,45 +176,36 @@ struct Ray {
 }
 
 impl Ray {
-    fn index(&self, t: f32) -> Vec3 {
+    fn at(&self, t: f32) -> Vec3 {
         self.origin + self.dir * t
     }
 }
 
+const SPHERE_CENTER: Point3 = Vec3([0., 0., -1.]);
+const SPHERE_RADIUS: f32 = 0.5;
+
 fn ray_color(r: &Ray) -> Color {
-    if hit_sphere(&Point3::new(0., 0., -1.), 0.5, r) {
-        return Color::new(1., 0., 0.);
+    let t = hit_sphere(&SPHERE_CENTER, SPHERE_RADIUS, r);
+    if t > 0. {
+        let n = (r.at(t) - SPHERE_CENTER).unit_vector();
+        return 0.5 * Color::new(1. + n.x(), 1. + n.y(), 1. + n.z());
     }
     let unit_dir = r.dir.unit_vector();
     let t = 0.5 * unit_dir.y() + 1.0;
     (1.0 - t) * Color::new(1., 1., 1.) + t * Color::new(0.5, 0.7, 1.0)
 }
 
-fn test_image() {
-
-    const WIDTH: usize = 256;
-    const HEIGHT: usize = 256;
-
-    println!("P3");
-    println!("{} {}", WIDTH, HEIGHT);
-    println!("{}", u8::MAX);
-    for j in (0..WIDTH).rev() {
-        eprint!("\rScanlines remaining: {}", j);
-        for i in 0..HEIGHT {
-            Color::new(i as f32 / (WIDTH - 1) as f32,
-                       j as f32 / (HEIGHT - 1) as f32,
-                       0.25).write_color(&mut stdout());
-        }
-    }
-}
-
-fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> bool {
+fn hit_sphere(center: &Point3, radius: f32, r: &Ray) -> f32 {
     let oc = r.origin - *center;
     let a = Vec3::dot(&r.dir, &r.dir);
     let b = 2. * Vec3::dot(&oc, &r.dir);
     let c = Vec3::dot(&oc, &oc) - radius.powi(2);
-    let discriminant = b*b - 4.*a*c;
-    discriminant > 0.
+    let discriminant = b * b - 4. * a * c;
+    if discriminant < 0. {
+        -1.
+    } else {
+        (-b - discriminant.sqrt()) / (2.0 * a)
+    }
 }
 
 fn main() {
@@ -226,10 +217,10 @@ fn main() {
     let viewport_width = aspect_ratio * viewport_height;
     let focal_length = 1.0;
     // Camera
-    let origin = Point3::new(0.,0.,0.);
+    let origin = Point3::new(0., 0., 0.);
     let horizontal = Vec3::new(viewport_width, 0., 0.);
     let vertical = Vec3::new(0., viewport_height, 0.);
-    let lower_left_corner = origin - horizontal / 2. - vertical / 2. - Vec3::new(0.,0.,focal_length);
+    let lower_left_corner = origin - horizontal / 2. - vertical / 2. - Vec3::new(0., 0., focal_length);
     // Render
     println!("P3");
     println!("{} {}", image_width, image_height);
@@ -241,13 +232,10 @@ fn main() {
             let v = j as f32 / (image_height - 1) as f32;
             let ray = Ray {
                 origin: origin,
-                dir: lower_left_corner + u*horizontal + v*vertical - origin,
+                dir: lower_left_corner + u * horizontal + v * vertical - origin,
             };
             let color = ray_color(&ray);
             color.write_color(&mut stdout());
         }
     }
-
-
-
 }
