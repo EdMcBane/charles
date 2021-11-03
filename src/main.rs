@@ -324,6 +324,15 @@ impl Raycaster {
     fn random_unit_vector(&mut self) -> Vec3{
         self.random_in_unit_sphere().unit_vector()
     }
+    fn random_in_hemisphere(&mut self, normal: &Vec3) -> Vec3 {
+        let in_unit_sphere = self.random_in_unit_sphere();
+        if Vec3::dot(&in_unit_sphere, normal) > 0. {
+            in_unit_sphere
+        } else {
+            -in_unit_sphere
+        }
+
+    }
 
 
     fn ray_color<W: Hittable>(&mut self, r: &Ray, world: W, depth: usize) -> Color {
