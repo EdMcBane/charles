@@ -2,9 +2,8 @@ use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, 
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
 
-const WIDTH: usize = 256;
-const HEIGHT: usize = 256;
 
+#[derive(Copy, Clone)]
 struct Vec3([f32; 3]);
 
 impl Default for Vec3 {
@@ -120,6 +119,14 @@ impl Mul<Vec3> for Vec3 {
     }
 }
 
+impl Mul<Vec3> for f32 {
+    type Output = Vec3;
+
+    fn mul(self, rhs: Vec3) -> Self::Output {
+        rhs * self
+    }
+}
+
 impl Mul<f32> for Vec3 {
     type Output = Vec3;
 
@@ -163,7 +170,28 @@ impl Display for Vec3 {
 type Point3 = Vec3;
 type Color = Vec3;
 
-fn main() {
+struct Ray {
+    orig: Point3,
+    dir: Vec3,
+}
+
+impl Ray {
+    fn index(&self, t: f32) -> Vec3 {
+        self.orig + self.dir * t
+    }
+}
+
+fn ray_color(ray: &Ray) -> Color {
+    let unit_dir = ray.dir.unit_vector();
+    let t = 0.5 * unit_dir.y() + 1.0;
+    (1.0 - t) * Color::new(1., 1., 1.) + t * Color::new(0.5, 0.7, 1.0)
+}
+
+fn test_image() {
+
+    const WIDTH: usize = 256;
+    const HEIGHT: usize = 256;
+
     println!("P3");
     println!("{} {}", WIDTH, HEIGHT);
     println!("{}", u8::MAX);
@@ -175,4 +203,39 @@ fn main() {
                        0.25).write_color(&mut stdout());
         }
     }
+}
+
+fn main() {
+    let aspect_ratio = 16.0 / 9.0;
+    let image_width = 400usize;
+    let image_height = (image_width as f32 / aspect_ratio) as usize;
+    // Image
+    let viewport_height = 2.0;
+    let viewport_width = aspect_ratio * viewport_height;
+    let focal_length = 1.0;
+    // Camera
+    let origin = Point3::new(0.,0.,0.);
+    let horizontal = Vec3::new(viewport_width, 0., 0.);
+    let vertical = Vec3::new(0., viewport_height, 0.);
+    let lower_left_corner = origin - horizontal / 2. - vertical / 2. - Vec3::new(0.,0.,focal_length);
+    // Render
+    println!("P3");
+    println!("{} {}", image_width, image_height);
+    println!("{}", u8::MAX);
+    for j in (0..image_height).rev() {
+        eprint!("\rScanlines remaining: {}", j);
+        for i in 0..image_width {
+            let u = i as f32 / (image_width - 1) as f32;
+            let v = j as f32 / (image_height - 1) as f32;
+            let ray = Ray {
+                orig: origin,
+                dir: lower_left_corner + u*horizontal + v*vertical - origin,
+            };
+            let color = ray_color(&ray);
+            color.write_color(&mut stdout());
+        }
+    }
+
+
+
 }
