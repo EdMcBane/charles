@@ -6,6 +6,7 @@ fn main() {
     println!("{} {}", WIDTH, HEIGHT);
     println!("{}", u8::MAX);
     for j in (0..WIDTH).rev() {
+        eprint!("\rScanlines remaining: {}", j);
         for i in 0..HEIGHT {
             let (r, g, b) = (
                 (255.999 * i as f32 / (WIDTH - 1) as f32) as u8,
