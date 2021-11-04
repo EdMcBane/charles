@@ -1,6 +1,6 @@
 #![feature(total_cmp)]
 
-use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range, Deref};
+use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range, Deref, DerefMut};
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
 use std::cmp::Ordering;
@@ -9,6 +9,8 @@ use rand::rngs::ThreadRng;
 use std::thread::Thread;
 use rand::distributions::Uniform;
 use rand::distributions::Distribution;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 #[derive(Copy, Clone)]
 struct Vec3([f64; 3]);
@@ -63,6 +65,14 @@ impl Vec3 {
                  (256. * (self.x() * scale).sqrt().clamp(0., 0.999)) as u8, // SQRT for gamma correction
                  (256. * (self.y() * scale).sqrt().clamp(0., 0.999)) as u8,
                  (256. * (self.z() * scale).sqrt().clamp(0., 0.999)) as u8).unwrap();
+    }
+    const ZERO_THRESH: f64 = 1e-8;
+    fn near_zero(&self) -> bool {
+        self.0.into_iter().all(|e| e.abs() < Vec3::ZERO_THRESH)
+    }
+
+    fn reflect(&self, n: &Vec3) -> Self {
+        *self - 2. * Vec3::dot(self, n) * (*n)
     }
 }
 
@@ -195,22 +205,21 @@ const COLOR_WHITE: Color = Vec3([1., 1., 1.]);
 const COLOR_BLACK: Color = Vec3([0., 0., 0.]);
 
 
-
-
-
 struct HitRecord {
     p: Point3,
     normal: Vec3,
+    mat: Rc<dyn Material>,
     t: f64,
     front_face: bool,
 }
 
 impl HitRecord {
-    fn new(t: f64, p: Point3, r: &Ray, outward_normal: Vec3) -> Self {
+    fn new(t: f64, p: Point3, r: &Ray, outward_normal: Vec3, mat: Rc<dyn Material>) -> Self {
         let front_face = Vec3::dot(&r.dir, &outward_normal) < 0.;
         HitRecord {
             t,
             p,
+            mat,
             front_face,
             normal: if front_face { outward_normal } else { -outward_normal },
         }
@@ -224,6 +233,7 @@ trait Hittable {
 struct Sphere {
     center: Point3,
     radius: f64,
+    mat: Rc<dyn Material>,
 }
 
 impl Hittable for &Sphere {
@@ -249,7 +259,7 @@ impl Hittable for Sphere {
             .find(|root| t_range.contains(root))
             .map(|root| {
                 let p = r.at(root);
-                HitRecord::new(root, p, r, (p - self.center) / self.radius)
+                HitRecord::new(root, p, r, (p - self.center) / self.radius, self.mat.clone())
             })
     }
 }
@@ -298,30 +308,103 @@ impl Camera {
     }
 }
 
+enum Scatter {
+    Absorbed,
+    Scattered {
+        ray: Ray,
+        attenuation: Color,
+    },
+}
+
+trait Material {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter;
+}
+
+struct Lambertian {
+    caster: Rc<Raycaster>,
+    albedo: Color,
+}
+
+impl Lambertian {
+    fn new(caster: Rc<Raycaster>, albedo: Color) -> Self {
+        Lambertian {
+            caster,
+            albedo,
+        }
+    }
+}
+
+impl Material for Lambertian {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+        let scatter_direction = rec.normal + self.caster.random_unit_vector();
+        Scatter::Scattered {
+            ray: Ray {
+                origin: rec.p,
+                dir: if !scatter_direction.near_zero() { scatter_direction } else { rec.normal }, // Avoid zero vec and NaNs
+            },
+            attenuation: self.albedo,
+        }
+    }
+}
+
+struct Metal {
+    albedo: Color,
+}
+
+impl Metal {
+    fn new(albedo: Color) -> Self {
+        Metal {
+            albedo,
+        }
+    }
+}
+
+impl Material for Metal {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+        let reflected = r_in.dir.unit_vector().reflect(&rec.normal);
+        Scatter::Scattered {
+            ray: Ray {
+                origin: rec.p,
+                dir: reflected,
+            },
+            attenuation: self.albedo,
+        }
+    }
+}
+
+struct VantaBlack;
+
+impl Material for VantaBlack {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+        Scatter::Absorbed
+    }
+}
+
 struct Raycaster {
-    rng: ThreadRng,
+    rng: RefCell<ThreadRng>,
     unit: Uniform<f64>,
 }
 
 impl Raycaster {
     fn new() -> Self {
         Raycaster {
-            rng: rand::thread_rng(),
+            rng: RefCell::new(rand::thread_rng()),
             unit: Uniform::from(-1.0..1.0),
         }
     }
-    fn random_in_unit_sphere(&mut self) -> Vec3 {
+    fn random_in_unit_sphere(&self) -> Vec3 {
         loop {
+            let mut rng = self.rng.borrow_mut();
             let p = Vec3::new(
-                self.unit.sample(&mut self.rng),
-                self.unit.sample(&mut self.rng),
-                self.unit.sample(&mut self.rng));
+                self.unit.sample(rng.deref_mut()),
+                self.unit.sample(rng.deref_mut()),
+                self.unit.sample(rng.deref_mut()));
             if p.length_squared() < 1. {
-                return p
+                return p;
             }
         }
     }
-    fn random_unit_vector(&mut self) -> Vec3{
+    fn random_unit_vector(&self) -> Vec3 {
         self.random_in_unit_sphere().unit_vector()
     }
     fn random_in_hemisphere(&mut self, normal: &Vec3) -> Vec3 {
@@ -331,38 +414,60 @@ impl Raycaster {
         } else {
             -in_unit_sphere
         }
-
     }
 
-
-    fn ray_color<W: Hittable>(&mut self, r: &Ray, world: W, depth: usize) -> Color {
+    fn ray_color<W: Hittable>(&self, r: &Ray, world: W, depth: usize) -> Color {
         if depth == 0 {
             return COLOR_BLACK;
         }
         let range = 0.001f64..f64::INFINITY;
         if let Some(rec) = world.hit(r, &range) {
-            let target = rec.p + rec.normal + self.random_unit_vector();
-            return 0.5 * self.ray_color(&Ray { origin: rec.p, dir: target - rec.p}, world, depth - 1);
+            match rec.mat.scatter(r, &rec) {
+                Scatter::Absorbed => return COLOR_BLACK,
+                Scatter::Scattered {
+                    ray,
+                    attenuation
+                } => {
+                    return attenuation * self.ray_color(&ray, world, depth - 1);
+                }
+            }
         }
         let unit_dir = r.dir.unit_vector();
         let t = 0.5 * (unit_dir.y() + 1.0);
         (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
     }
 
-    fn main(&mut self) {
+    fn main(self: Rc<Raycaster>) {
         // Image
         let aspect_ratio = 16.0 / 9.0;
         let image_width = 400usize;
         let image_height = (image_width as f64 / aspect_ratio) as usize;
         let samples_per_pixel = 100;
         let max_depth = 50;
+        let _vantablack = Rc::new(VantaBlack {});
+        let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
+        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.7, 0.3, 0.3)));
+        let material_left = Rc::new(Metal::new(Color::new(0.8, 0.8, 0.8)));
+        let material_right = Rc::new(Metal::new(Color::new(0.8, 0.6, 0.2)));
+
+
         // World
         let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
-            center: Point3::new(0., 0., -1.),
-            radius: 0.5,
-        }), Box::new(Sphere {
             center: Point3::new(0., -100.5, -1.),
             radius: 100.,
+            mat: material_ground.clone(),
+        }), Box::new(Sphere {
+            center: Point3::new(0., 0., -1.),
+            radius: 0.5,
+            mat: material_center.clone(),
+        }),  Box::new(Sphere {
+            center: Point3::new(-1., 0., -1.),
+            radius: 0.5,
+            mat: material_left.clone(),
+        }),  Box::new(Sphere {
+            center: Point3::new(1., 0., -1.),
+            radius: 0.5,
+            mat: material_right.clone(),
         })];
 
         // Camera
@@ -387,6 +492,7 @@ impl Raycaster {
         }
     }
 }
+
 fn main() {
-    Raycaster::new().main()
+    Rc::new(Raycaster::new()).main()
 }
