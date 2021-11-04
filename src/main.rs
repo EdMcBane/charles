@@ -292,9 +292,10 @@ struct Camera {
 }
 
 impl Camera {
-    fn new() -> Self {
-        let aspect_ratio = 16.0 / 9.0;
-        let viewport_height = 2.0;
+    fn new(vfov: f64, aspect_ratio: f64) -> Self {
+        let theta = degrees_to_radians(vfov);
+        let h = (theta / 2.0).tan();
+        let viewport_height = 2.0 * h;
         let viewport_width = aspect_ratio * viewport_height;
         let focal_length = 1.0;
 
@@ -504,38 +505,24 @@ impl Raycaster {
         let image_height = (image_width as f64 / aspect_ratio) as usize;
         let samples_per_pixel = 100;
         let max_depth = 50;
-        let _vantablack = Rc::new(VantaBlack {});
-        let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
-        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.1, 0.2, 0.5)));
-        let material_left = Rc::new(Dielectric::new(1.5));
-        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 0.0));
-
 
         // World
+        let r = (std::f64::consts::PI / 4.0).cos();
+        let material_left  = Rc::new(Lambertian::new(self.clone(), Color::new(0., 0., 1.0)));
+        let material_right  = Rc::new(Lambertian::new(self.clone(), Color::new(1., 0., 0.0)));
+
         let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
-            center: Point3::new(0., -100.5, -1.),
-            radius: 100.,
-            mat: material_ground.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(0., 0., -1.),
-            radius: 0.5,
-            mat: material_center.clone(),
-        }),  Box::new(Sphere {
-            center: Point3::new(-1., 0., -1.),
-            radius: 0.5,
+            center: Point3::new(-r, 0., -1.),
+            radius: r,
             mat: material_left.clone(),
         }), Box::new(Sphere {
-            center: Point3::new(-1., 0., -1.),
-            radius: -0.4,
-            mat: material_left.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(1., 0., -1.),
-            radius: 0.5,
+            center: Point3::new(r, 0., -1.),
+            radius: r,
             mat: material_right.clone(),
         })];
 
         // Camera
-        let cam = Camera::new();
+        let cam = Camera::new(90., aspect_ratio);
         let mut rand = rand::thread_rng();
         // Render
         println!("P3");
