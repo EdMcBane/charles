@@ -348,13 +348,18 @@ impl Material for Lambertian {
 }
 
 struct Metal {
+    caster: Rc<Raycaster>,
     albedo: Color,
+    fuzz: f64,
 }
 
 impl Metal {
-    fn new(albedo: Color) -> Self {
+    fn new(caster: Rc<Raycaster>, albedo: Color, fuzz: f64) -> Self {
+        assert!(fuzz <= 1.);
         Metal {
+            caster,
             albedo,
+            fuzz,
         }
     }
 }
@@ -362,12 +367,17 @@ impl Metal {
 impl Material for Metal {
     fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
         let reflected = r_in.dir.unit_vector().reflect(&rec.normal);
-        Scatter::Scattered {
-            ray: Ray {
-                origin: rec.p,
-                dir: reflected,
-            },
-            attenuation: self.albedo,
+        let scattered = reflected + self.fuzz * self.caster.random_in_unit_sphere();
+        if Vec3::dot(&scattered, &rec.normal) <= 0. {
+            Scatter::Absorbed
+        } else {
+            Scatter::Scattered {
+                ray: Ray {
+                    origin: rec.p,
+                    dir: scattered,
+                },
+                attenuation: self.albedo,
+            }
         }
     }
 }
@@ -447,8 +457,8 @@ impl Raycaster {
         let _vantablack = Rc::new(VantaBlack {});
         let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
         let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.7, 0.3, 0.3)));
-        let material_left = Rc::new(Metal::new(Color::new(0.8, 0.8, 0.8)));
-        let material_right = Rc::new(Metal::new(Color::new(0.8, 0.6, 0.2)));
+        let material_left = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.8, 0.8), 0.3));
+        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 1.0));
 
 
         // World
