@@ -292,27 +292,30 @@ struct Camera {
 }
 
 impl Camera {
-    fn new(vfov: f64, aspect_ratio: f64) -> Self {
+    fn new(look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64) -> Self {
         let theta = degrees_to_radians(vfov);
         let h = (theta / 2.0).tan();
         let viewport_height = 2.0 * h;
         let viewport_width = aspect_ratio * viewport_height;
-        let focal_length = 1.0;
 
-        let origin = Point3::default();
-        let horizontal = Vec3::new(viewport_width, 0., 0.);
-        let vertical = Vec3::new(0., viewport_height, 0.);
+        let w = (look_from - look_at).unit_vector();
+        let u = vup.cross(w).unit_vector();
+        let v = w.cross(u);
+
+        let origin = look_from;
+        let horizontal = viewport_width * u;
+        let vertical = viewport_height * v;
         Camera {
             origin,
             horizontal,
             vertical,
-            lower_left_corner: origin - horizontal / 2. - vertical / 2. - Vec3::new(0., 0., focal_length),
+            lower_left_corner: origin - horizontal / 2. - vertical / 2. - w,
         }
     }
-    fn get_ray(&self, u: f64, v: f64) -> Ray {
+    fn get_ray(&self, s: f64, t: f64) -> Ray {
         Ray {
             origin: self.origin,
-            dir: self.lower_left_corner + u * self.horizontal + v * self.vertical - self.origin,
+            dir: self.lower_left_corner + s * self.horizontal + t * self.vertical - self.origin,
         }
     }
 }
@@ -507,22 +510,43 @@ impl Raycaster {
         let max_depth = 50;
 
         // World
-        let r = (std::f64::consts::PI / 4.0).cos();
-        let material_left  = Rc::new(Lambertian::new(self.clone(), Color::new(0., 0., 1.0)));
-        let material_right  = Rc::new(Lambertian::new(self.clone(), Color::new(1., 0., 0.0)));
+        let _vantablack = Rc::new(VantaBlack {});
+        let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
+        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.1, 0.2, 0.5)));
+        let material_left = Rc::new(Dielectric::new(1.5));
+        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 0.0));
 
+
+        // World
         let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
-            center: Point3::new(-r, 0., -1.),
-            radius: r,
+            center: Point3::new(0., -100.5, -1.),
+            radius: 100.,
+            mat: material_ground.clone(),
+        }), Box::new(Sphere {
+            center: Point3::new(0., 0., -1.),
+            radius: 0.5,
+            mat: material_center.clone(),
+        }),  Box::new(Sphere {
+            center: Point3::new(-1., 0., -1.),
+            radius: 0.5,
             mat: material_left.clone(),
         }), Box::new(Sphere {
-            center: Point3::new(r, 0., -1.),
-            radius: r,
+            center: Point3::new(-1., 0., -1.),
+            radius: -0.45,
+            mat: material_left.clone(),
+        }), Box::new(Sphere {
+            center: Point3::new(1., 0., -1.),
+            radius: 0.5,
             mat: material_right.clone(),
         })];
 
         // Camera
-        let cam = Camera::new(90., aspect_ratio);
+        let cam = Camera::new(
+            Point3::new(-2., 2., 1.),
+            Point3::new(0.,0.,-1.),
+            Vec3::new(0.,1.,0.),
+            20.,
+            aspect_ratio);
         let mut rand = rand::thread_rng();
         // Render
         println!("P3");
