@@ -11,6 +11,7 @@ use rand::distributions::Uniform;
 use rand::distributions::Distribution;
 use std::rc::Rc;
 use std::cell::RefCell;
+use crate::Scatter::Scattered;
 
 #[derive(Copy, Clone)]
 struct Vec3([f64; 3]);
@@ -73,6 +74,13 @@ impl Vec3 {
 
     fn reflect(&self, n: &Vec3) -> Self {
         *self - 2. * Vec3::dot(self, n) * (*n)
+    }
+
+    fn refract(&self, n: &Vec3, etai_over_etat: f64) -> Self {
+        let cos_theta = Vec3::dot(&-*self, n).min(1.0);
+        let r_out_perp = etai_over_etat * (*self + cos_theta * *n);
+        let r_out_parallel = -(1.0 - r_out_perp.length_squared()).abs().sqrt() * *n;
+        r_out_perp + r_out_parallel
     }
 }
 
@@ -390,6 +398,48 @@ impl Material for VantaBlack {
     }
 }
 
+struct Dielectric {
+    rng: RefCell<ThreadRng>,
+    ir: f64,
+}
+impl Dielectric {
+    fn new(ir: f64) -> Self {
+        Self {
+            rng: RefCell::new(rand::thread_rng()),
+            ir,
+        }
+    }
+
+    fn reflectance(&self, cosine: f64, ref_idx: f64) -> f64 {
+        // Schlick's approximation
+        let r0 = ((1.0 - ref_idx) / (1. + ref_idx)).powi(2);
+        r0 + (1. - r0)*(1.0 - cosine).powi(5)
+    }
+}
+
+impl Material for Dielectric {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+
+        let refraction_ratio = if rec.front_face { 1.0 / self.ir } else { self.ir };
+        let unit_direction = r_in.dir.unit_vector();
+        let cos_theta = Vec3::dot(&-unit_direction, &rec.normal).min(1.0);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+        let cannot_refract = refraction_ratio * sin_theta > 1.0;
+        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > self.rng.borrow_mut().gen_range(0.0..1.0){
+            unit_direction.reflect(&rec.normal)
+        } else {
+            unit_direction.refract(&rec.normal, refraction_ratio)
+        };
+        Scatter::Scattered {
+            ray: Ray {
+                origin: rec.p,
+                dir: refracted,
+            },
+            attenuation: COLOR_WHITE,
+        }
+    }
+}
+
 struct Raycaster {
     rng: RefCell<ThreadRng>,
     unit: Uniform<f64>,
@@ -456,9 +506,9 @@ impl Raycaster {
         let max_depth = 50;
         let _vantablack = Rc::new(VantaBlack {});
         let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
-        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.7, 0.3, 0.3)));
-        let material_left = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.8, 0.8), 0.3));
-        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 1.0));
+        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.1, 0.2, 0.5)));
+        let material_left = Rc::new(Dielectric::new(1.5));
+        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 0.0));
 
 
         // World
@@ -474,7 +524,11 @@ impl Raycaster {
             center: Point3::new(-1., 0., -1.),
             radius: 0.5,
             mat: material_left.clone(),
-        }),  Box::new(Sphere {
+        }), Box::new(Sphere {
+            center: Point3::new(-1., 0., -1.),
+            radius: -0.4,
+            mat: material_left.clone(),
+        }), Box::new(Sphere {
             center: Point3::new(1., 0., -1.),
             radius: 0.5,
             mat: material_right.clone(),
