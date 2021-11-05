@@ -285,14 +285,19 @@ fn degrees_to_radians(degrees: f64) -> f64 {
 }
 
 struct Camera {
+    caster: Rc<Raycaster>,
     origin: Point3,
     lower_left_corner: Point3,
     horizontal: Vec3,
     vertical: Vec3,
+    u: Vec3,
+    v: Vec3,
+    w: Vec3,
+    lens_radius: f64,
 }
 
 impl Camera {
-    fn new(look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64) -> Self {
+    fn new(caster: Rc<Raycaster>, look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64, aperture: f64, focus_dist: f64) -> Self {
         let theta = degrees_to_radians(vfov);
         let h = (theta / 2.0).tan();
         let viewport_height = 2.0 * h;
@@ -303,19 +308,26 @@ impl Camera {
         let v = w.cross(u);
 
         let origin = look_from;
-        let horizontal = viewport_width * u;
-        let vertical = viewport_height * v;
+        let horizontal = focus_dist * viewport_width * u;
+        let vertical = focus_dist * viewport_height * v;
         Camera {
+            caster,
             origin,
             horizontal,
             vertical,
-            lower_left_corner: origin - horizontal / 2. - vertical / 2. - w,
+            lower_left_corner: origin - horizontal / 2. - vertical / 2. - focus_dist * w,
+            u,
+            v,
+            w,
+            lens_radius: aperture / 2.,
         }
     }
     fn get_ray(&self, s: f64, t: f64) -> Ray {
+        let disk_pos = self.lens_radius * self.caster.random_in_unit_disk();
+        let offset = self.u * disk_pos.x() + self.v * disk_pos.y();
         Ray {
-            origin: self.origin,
-            dir: self.lower_left_corner + s * self.horizontal + t * self.vertical - self.origin,
+            origin: self.origin + offset,
+            dir: self.lower_left_corner + s * self.horizontal + t * self.vertical - self.origin - offset,
         }
     }
 }
@@ -406,6 +418,7 @@ struct Dielectric {
     rng: RefCell<ThreadRng>,
     ir: f64,
 }
+
 impl Dielectric {
     fn new(ir: f64) -> Self {
         Self {
@@ -417,19 +430,18 @@ impl Dielectric {
     fn reflectance(&self, cosine: f64, ref_idx: f64) -> f64 {
         // Schlick's approximation
         let r0 = ((1.0 - ref_idx) / (1. + ref_idx)).powi(2);
-        r0 + (1. - r0)*(1.0 - cosine).powi(5)
+        r0 + (1. - r0) * (1.0 - cosine).powi(5)
     }
 }
 
 impl Material for Dielectric {
     fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
-
         let refraction_ratio = if rec.front_face { 1.0 / self.ir } else { self.ir };
         let unit_direction = r_in.dir.unit_vector();
         let cos_theta = Vec3::dot(&-unit_direction, &rec.normal).min(1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
-        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > self.rng.borrow_mut().gen_range(0.0..1.0){
+        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > self.rng.borrow_mut().gen_range(0.0..1.0) {
             unit_direction.reflect(&rec.normal)
         } else {
             unit_direction.refract(&rec.normal, refraction_ratio)
@@ -468,6 +480,19 @@ impl Raycaster {
             }
         }
     }
+    fn random_in_unit_disk(&self) -> Vec3 {
+        let mut rng = self.rng.borrow_mut();
+        loop {
+            let p = Vec3::new(
+                self.unit.sample(rng.deref_mut()),
+                self.unit.sample(rng.deref_mut()),
+                0.);
+            if p.length_squared() < 1. {
+                return p;
+            }
+        }
+    }
+
     fn random_unit_vector(&self) -> Vec3 {
         self.random_in_unit_sphere().unit_vector()
     }
@@ -514,7 +539,7 @@ impl Raycaster {
         let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
         let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.1, 0.2, 0.5)));
         let material_left = Rc::new(Dielectric::new(1.5));
-        let material_right = Rc::new(Metal::new(self.clone(),Color::new(0.8, 0.6, 0.2), 0.0));
+        let material_right = Rc::new(Metal::new(self.clone(), Color::new(0.8, 0.6, 0.2), 0.0));
 
 
         // World
@@ -526,7 +551,7 @@ impl Raycaster {
             center: Point3::new(0., 0., -1.),
             radius: 0.5,
             mat: material_center.clone(),
-        }),  Box::new(Sphere {
+        }), Box::new(Sphere {
             center: Point3::new(-1., 0., -1.),
             radius: 0.5,
             mat: material_left.clone(),
@@ -541,12 +566,19 @@ impl Raycaster {
         })];
 
         // Camera
+        let look_from = Point3::new(3., 3., 2.);
+        let look_at = Point3::new(0., 0., -1.);
+        let focus_dist = (look_from - look_at).length();
         let cam = Camera::new(
-            Point3::new(-2., 2., 1.),
-            Point3::new(0.,0.,-1.),
-            Vec3::new(0.,1.,0.),
+            self.clone(),
+            look_from,
+            look_at,
+            Vec3::new(0., 1., 0.),
             20.,
-            aspect_ratio);
+            aspect_ratio,
+            2.,
+            focus_dist,
+        );
         let mut rand = rand::thread_rng();
         // Render
         println!("P3");
