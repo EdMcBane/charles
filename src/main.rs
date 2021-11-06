@@ -473,6 +473,24 @@ impl Raycaster {
             }
         }
     }
+    fn random(&self) -> Vec3 {
+        let mut rng = my_rng();
+        Vec3::new(
+            self.unit.sample(&mut rng),
+            self.unit.sample(&mut rng),
+            self.unit.sample(&mut rng),
+        )
+    }
+
+    fn random_in_range(&self, range: Range<f64>) -> Vec3 {
+        let mut rng = my_rng();
+        Vec3::new(
+            my_rng().gen_range(range.clone()),
+            my_rng().gen_range(range.clone()),
+            my_rng().gen_range(range),
+        )
+    }
+
     fn random_in_unit_disk(&self) -> Vec3 {
         let mut rng = my_rng();
         loop {
@@ -522,46 +540,18 @@ impl Raycaster {
 
     fn main(self: &Raycaster) {
         // Image
-        let aspect_ratio = 16.0 / 9.0;
-        let image_width = 400usize;
+        let aspect_ratio = 3.0 / 2.0;
+        let image_width = 1200usize;
         let image_height = (image_width as f64 / aspect_ratio) as usize;
-        let samples_per_pixel = 100;
+        let samples_per_pixel = 500;
         let max_depth = 50;
 
         // World
-        let _vantablack = Arc::new(VantaBlack {});
-        let material_ground = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.8, 0.8, 0.0)));
-        let material_center = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.1, 0.2, 0.5)));
-        let material_left = Arc::new(Dielectric::new(1.5));
-        let material_right = Arc::new(Metal::new(Raycaster::new(), Color::new(0.8, 0.6, 0.2), 0.0));
-
-
-        // World
-        let world: Vec<Box<dyn Hittable + Sync>> = vec![Box::new(Sphere {
-            center: Point3::new(0., -100.5, -1.),
-            radius: 100.,
-            mat: material_ground.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(0., 0., -1.),
-            radius: 0.5,
-            mat: material_center.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(-1., 0., -1.),
-            radius: 0.5,
-            mat: material_left.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(-1., 0., -1.),
-            radius: -0.45,
-            mat: material_left.clone(),
-        }), Box::new(Sphere {
-            center: Point3::new(1., 0., -1.),
-            radius: 0.5,
-            mat: material_right.clone(),
-        })];
+        let world = self.random_scene();
 
         // Camera
-        let look_from = Point3::new(3., 3., 2.);
-        let look_at = Point3::new(0., 0., -1.);
+        let look_from = Point3::new(13., 2., 3.);
+        let look_at = Point3::new(0., 0., 0.);
         let focus_dist = (look_from - look_at).length();
         let cam = Camera::new(
             Raycaster::new(),
@@ -570,8 +560,8 @@ impl Raycaster {
             Vec3::new(0., 1., 0.),
             20.,
             aspect_ratio,
-            2.,
-            focus_dist,
+            0.1,
+            10.,
         );
 
         // Render
@@ -600,6 +590,63 @@ impl Raycaster {
                 pixel_color.write_color(&mut stdout(), samples_per_pixel);
             }
         }
+    }
+
+    fn random_scene(&self) -> Vec<Box<dyn Hittable + Sync>> {
+        let mut world: Vec<Box<dyn Hittable + Sync>> = Vec::new();
+        let material_ground = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.5, 0.5, 0.5)));
+        world.push(Box::new(Sphere {
+            center: Point3::new(0., -1000., 0.),
+            radius: 1000.,
+            mat: material_ground.clone(),
+        }));
+
+        for a in -11..11 {
+            for b in -11..11 {
+                let center = Point3::new(
+                    a as f64 + 0.9 * my_rng().gen_range(0.0..1.0),
+                    0.2,
+                    b as f64 + 0.9 * my_rng().gen_range(0.0..1.0));
+                if (center - Point3::new(4.,0.2, 0.)).length() < 0.9 {
+                    continue;
+                }
+                let sphere_material: Arc<dyn Material + Sync + Send> = match my_rng().gen_range::<f64, Range<f64>>(0.0..1.0) {
+                    f if f < 0.8 =>  {
+                        let albedo =  self.random() * self.random();
+                        Arc::new(Lambertian::new(Raycaster::new(), albedo))
+                    },
+                    f if f < 0.95 => {
+                        let albedo = self.random_in_range(0.5..1.0);
+                        let fuzz = my_rng().gen_range(0.0..0.5);
+                        Arc::new(Metal::new(Raycaster::new(), albedo, fuzz))
+                    },
+                    _ => {
+                        Arc::new(Dielectric::new(1.5))
+                    },
+                };
+                world.push(Box::new(Sphere {
+                    center,
+                    radius: 0.2,
+                    mat: sphere_material
+                }))
+            }
+        }
+        world.push(Box::new(Sphere{
+            center: Point3::new(0.,1.,0.),
+            radius: 1.0,
+            mat: Arc::new( Dielectric::new(1.5)),
+        }));
+        world.push(Box::new(Sphere{
+            center: Point3::new(-4.,1.,0.),
+            radius: 1.0,
+            mat: Arc::new( Lambertian::new(Raycaster::new(), Color::new(0.4, 0.2, 0.1))),
+        }));
+        world.push(Box::new(Sphere{
+            center: Point3::new(4.,1.,0.),
+            radius: 1.0,
+            mat: Arc::new( Metal::new(Raycaster::new(), Color::new(0.7,0.6,0.5), 0.0)),
+        }));
+        world
     }
 }
 
