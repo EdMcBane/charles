@@ -1,14 +1,16 @@
 #![feature(total_cmp)]
 
+mod rng;
+
 use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range};
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
-use rand::prelude::*;
 use rand::distributions::Uniform;
 use rand::distributions::Distribution;
 use rayon::prelude::*;
 use std::sync::Arc;
-use rand::prelude::SmallRng;
+use crate::rng::my_rng;
+use rand::Rng;
 
 #[derive(Copy, Clone)]
 struct Vec3([f64; 3]);
@@ -434,7 +436,7 @@ impl Material for Dielectric {
         let cos_theta = Vec3::dot(&-unit_direction, &rec.normal).min(1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
-        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > thread_rng().gen_range(0.0..1.0) {
+        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > my_rng().gen_range(0.0..1.0) {
             unit_direction.reflect(&rec.normal)
         } else {
             unit_direction.refract(&rec.normal, refraction_ratio)
@@ -461,7 +463,7 @@ impl Raycaster {
     }
     fn random_in_unit_sphere(&self) -> Vec3 {
         loop {
-            let mut rng = thread_rng();
+            let mut rng = my_rng();
             let p = Vec3::new(
                 self.unit.sample(&mut rng),
                 self.unit.sample(&mut rng),
@@ -472,7 +474,7 @@ impl Raycaster {
         }
     }
     fn random_in_unit_disk(&self) -> Vec3 {
-        let mut rng = thread_rng();
+        let mut rng = my_rng();
         loop {
             let p = Vec3::new(
                 self.unit.sample(&mut rng),
@@ -573,6 +575,7 @@ impl Raycaster {
         );
 
         // Render
+        rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
         println!("P3");
         println!("{} {}", image_width, image_height);
         println!("{}", u8::MAX);
@@ -580,7 +583,7 @@ impl Raycaster {
         output.par_extend(
             (0..image_height).into_par_iter().rev()
             .map(|j| {
-                let mut rand = SmallRng::from_entropy();
+                let mut rand = my_rng();
                 (0..image_width).into_iter().map(|i| {
                     let mut pixel_color = COLOR_BLACK;
                     for _ in 0..samples_per_pixel {
