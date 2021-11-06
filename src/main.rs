@@ -1,17 +1,14 @@
 #![feature(total_cmp)]
 
-use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range, Deref, DerefMut};
+use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range};
 use std::fmt::{Display, Formatter};
 use std::io::{stdout, Write};
-use std::cmp::Ordering;
-use rand::Rng;
-use rand::rngs::ThreadRng;
-use std::thread::Thread;
+use rand::prelude::*;
 use rand::distributions::Uniform;
 use rand::distributions::Distribution;
-use std::rc::Rc;
-use std::cell::RefCell;
-use crate::Scatter::Scattered;
+use rayon::prelude::*;
+use std::sync::Arc;
+use rand::prelude::SmallRng;
 
 #[derive(Copy, Clone)]
 struct Vec3([f64; 3]);
@@ -207,8 +204,6 @@ impl Ray {
     }
 }
 
-const SPHERE_CENTER: Point3 = Vec3([0., 0., -1.]);
-const SPHERE_RADIUS: f64 = 0.5;
 const COLOR_WHITE: Color = Vec3([1., 1., 1.]);
 const COLOR_BLACK: Color = Vec3([0., 0., 0.]);
 
@@ -216,13 +211,13 @@ const COLOR_BLACK: Color = Vec3([0., 0., 0.]);
 struct HitRecord {
     p: Point3,
     normal: Vec3,
-    mat: Rc<dyn Material>,
+    mat: Arc<dyn Material + Sync>,
     t: f64,
     front_face: bool,
 }
 
 impl HitRecord {
-    fn new(t: f64, p: Point3, r: &Ray, outward_normal: Vec3, mat: Rc<dyn Material>) -> Self {
+    fn new(t: f64, p: Point3, r: &Ray, outward_normal: Vec3, mat: Arc<dyn Material + Sync>) -> Self {
         let front_face = Vec3::dot(&r.dir, &outward_normal) < 0.;
         HitRecord {
             t,
@@ -241,7 +236,7 @@ trait Hittable {
 struct Sphere {
     center: Point3,
     radius: f64,
-    mat: Rc<dyn Material>,
+    mat: Arc<dyn Material + Sync + Send>,
 }
 
 impl Hittable for &Sphere {
@@ -272,7 +267,7 @@ impl Hittable for Sphere {
     }
 }
 
-impl Hittable for &Vec<Box<dyn Hittable>> {
+impl Hittable for &Vec<Box<dyn Hittable + Sync>> {
     fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
         self.iter()
             .filter_map(|hittable| hittable.hit(r, t_range))
@@ -285,19 +280,19 @@ fn degrees_to_radians(degrees: f64) -> f64 {
 }
 
 struct Camera {
-    caster: Rc<Raycaster>,
+    caster: Raycaster,
     origin: Point3,
     lower_left_corner: Point3,
     horizontal: Vec3,
     vertical: Vec3,
     u: Vec3,
     v: Vec3,
-    w: Vec3,
+    _w: Vec3,
     lens_radius: f64,
 }
 
 impl Camera {
-    fn new(caster: Rc<Raycaster>, look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64, aperture: f64, focus_dist: f64) -> Self {
+    fn new(caster: Raycaster, look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64, aperture: f64, focus_dist: f64) -> Self {
         let theta = degrees_to_radians(vfov);
         let h = (theta / 2.0).tan();
         let viewport_height = 2.0 * h;
@@ -318,7 +313,7 @@ impl Camera {
             lower_left_corner: origin - horizontal / 2. - vertical / 2. - focus_dist * w,
             u,
             v,
-            w,
+            _w: w,
             lens_radius: aperture / 2.,
         }
     }
@@ -345,12 +340,12 @@ trait Material {
 }
 
 struct Lambertian {
-    caster: Rc<Raycaster>,
+    caster: Raycaster,
     albedo: Color,
 }
 
 impl Lambertian {
-    fn new(caster: Rc<Raycaster>, albedo: Color) -> Self {
+    fn new(caster: Raycaster, albedo: Color) -> Self {
         Lambertian {
             caster,
             albedo,
@@ -359,7 +354,7 @@ impl Lambertian {
 }
 
 impl Material for Lambertian {
-    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+    fn scatter(&self, _r_in: &Ray, rec: &HitRecord) -> Scatter {
         let scatter_direction = rec.normal + self.caster.random_unit_vector();
         Scatter::Scattered {
             ray: Ray {
@@ -372,13 +367,13 @@ impl Material for Lambertian {
 }
 
 struct Metal {
-    caster: Rc<Raycaster>,
+    caster: Raycaster,
     albedo: Color,
     fuzz: f64,
 }
 
 impl Metal {
-    fn new(caster: Rc<Raycaster>, albedo: Color, fuzz: f64) -> Self {
+    fn new(caster: Raycaster, albedo: Color, fuzz: f64) -> Self {
         assert!(fuzz <= 1.);
         Metal {
             caster,
@@ -409,20 +404,18 @@ impl Material for Metal {
 struct VantaBlack;
 
 impl Material for VantaBlack {
-    fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
+    fn scatter(&self, _r_in: &Ray, _rec: &HitRecord) -> Scatter {
         Scatter::Absorbed
     }
 }
 
 struct Dielectric {
-    rng: RefCell<ThreadRng>,
     ir: f64,
 }
 
 impl Dielectric {
     fn new(ir: f64) -> Self {
         Self {
-            rng: RefCell::new(rand::thread_rng()),
             ir,
         }
     }
@@ -441,7 +434,7 @@ impl Material for Dielectric {
         let cos_theta = Vec3::dot(&-unit_direction, &rec.normal).min(1.0);
         let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
         let cannot_refract = refraction_ratio * sin_theta > 1.0;
-        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > self.rng.borrow_mut().gen_range(0.0..1.0) {
+        let refracted = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > thread_rng().gen_range(0.0..1.0) {
             unit_direction.reflect(&rec.normal)
         } else {
             unit_direction.refract(&rec.normal, refraction_ratio)
@@ -457,35 +450,33 @@ impl Material for Dielectric {
 }
 
 struct Raycaster {
-    rng: RefCell<ThreadRng>,
     unit: Uniform<f64>,
 }
 
 impl Raycaster {
     fn new() -> Self {
         Raycaster {
-            rng: RefCell::new(rand::thread_rng()),
             unit: Uniform::from(-1.0..1.0),
         }
     }
     fn random_in_unit_sphere(&self) -> Vec3 {
         loop {
-            let mut rng = self.rng.borrow_mut();
+            let mut rng = thread_rng();
             let p = Vec3::new(
-                self.unit.sample(rng.deref_mut()),
-                self.unit.sample(rng.deref_mut()),
-                self.unit.sample(rng.deref_mut()));
+                self.unit.sample(&mut rng),
+                self.unit.sample(&mut rng),
+                self.unit.sample(&mut rng));
             if p.length_squared() < 1. {
                 return p;
             }
         }
     }
     fn random_in_unit_disk(&self) -> Vec3 {
-        let mut rng = self.rng.borrow_mut();
+        let mut rng = thread_rng();
         loop {
             let p = Vec3::new(
-                self.unit.sample(rng.deref_mut()),
-                self.unit.sample(rng.deref_mut()),
+                self.unit.sample(&mut rng),
+                self.unit.sample(&mut rng),
                 0.);
             if p.length_squared() < 1. {
                 return p;
@@ -496,6 +487,7 @@ impl Raycaster {
     fn random_unit_vector(&self) -> Vec3 {
         self.random_in_unit_sphere().unit_vector()
     }
+    #[allow(dead_code)]
     fn random_in_hemisphere(&mut self, normal: &Vec3) -> Vec3 {
         let in_unit_sphere = self.random_in_unit_sphere();
         if Vec3::dot(&in_unit_sphere, normal) > 0. {
@@ -526,7 +518,7 @@ impl Raycaster {
         (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
     }
 
-    fn main(self: Rc<Raycaster>) {
+    fn main(self: &Raycaster) {
         // Image
         let aspect_ratio = 16.0 / 9.0;
         let image_width = 400usize;
@@ -535,15 +527,15 @@ impl Raycaster {
         let max_depth = 50;
 
         // World
-        let _vantablack = Rc::new(VantaBlack {});
-        let material_ground = Rc::new(Lambertian::new(self.clone(), Color::new(0.8, 0.8, 0.0)));
-        let material_center = Rc::new(Lambertian::new(self.clone(), Color::new(0.1, 0.2, 0.5)));
-        let material_left = Rc::new(Dielectric::new(1.5));
-        let material_right = Rc::new(Metal::new(self.clone(), Color::new(0.8, 0.6, 0.2), 0.0));
+        let _vantablack = Arc::new(VantaBlack {});
+        let material_ground = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.8, 0.8, 0.0)));
+        let material_center = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.1, 0.2, 0.5)));
+        let material_left = Arc::new(Dielectric::new(1.5));
+        let material_right = Arc::new(Metal::new(Raycaster::new(), Color::new(0.8, 0.6, 0.2), 0.0));
 
 
         // World
-        let world: Vec<Box<dyn Hittable>> = vec![Box::new(Sphere {
+        let world: Vec<Box<dyn Hittable + Sync>> = vec![Box::new(Sphere {
             center: Point3::new(0., -100.5, -1.),
             radius: 100.,
             mat: material_ground.clone(),
@@ -570,7 +562,7 @@ impl Raycaster {
         let look_at = Point3::new(0., 0., -1.);
         let focus_dist = (look_from - look_at).length();
         let cam = Camera::new(
-            self.clone(),
+            Raycaster::new(),
             look_from,
             look_at,
             Vec3::new(0., 1., 0.),
@@ -579,21 +571,29 @@ impl Raycaster {
             2.,
             focus_dist,
         );
-        let mut rand = rand::thread_rng();
+
         // Render
         println!("P3");
         println!("{} {}", image_width, image_height);
         println!("{}", u8::MAX);
-        for j in (0..image_height).rev() {
-            eprint!("\rScanlines remaining: {}", j);
-            for i in 0..image_width {
-                let mut pixel_color = COLOR_BLACK;
-                for s in 0..samples_per_pixel {
-                    let u = (i as f64 + rand.gen_range(0.0..1.0)) / (image_width - 1) as f64;
-                    let v = (j as f64 + rand.gen_range(0.0..1.0)) / (image_height - 1) as f64;
-                    let r = cam.get_ray(u, v);
-                    pixel_color += self.ray_color(&r, &world, max_depth);
-                }
+        let mut output: Vec<Vec<Color>> = Vec::new();
+        output.par_extend(
+            (0..image_height).into_par_iter().rev()
+            .map(|j| {
+                let mut rand = SmallRng::from_entropy();
+                (0..image_width).into_iter().map(|i| {
+                    let mut pixel_color = COLOR_BLACK;
+                    for _ in 0..samples_per_pixel {
+                        let u = (i as f64 + rand.gen_range(0.0..1.0)) / (image_width - 1) as f64;
+                        let v = (j as f64 + rand.gen_range(0.0..1.0)) / (image_height - 1) as f64;
+                        let r = cam.get_ray(u, v);
+                        pixel_color += self.ray_color(&r, &world, max_depth);
+                    }
+                    pixel_color
+                }).collect()
+            }));
+        for line in output {
+            for pixel_color in line {
                 pixel_color.write_color(&mut stdout(), samples_per_pixel);
             }
         }
@@ -601,5 +601,5 @@ impl Raycaster {
 }
 
 fn main() {
-    Rc::new(Raycaster::new()).main()
+    Arc::new(Raycaster::new()).main()
 }
