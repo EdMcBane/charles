@@ -11,6 +11,11 @@ use rayon::prelude::*;
 use std::sync::Arc;
 use crate::rng::my_rng;
 use rand::Rng;
+use auto_impl::auto_impl;
+use static_init::dynamic;
+
+#[dynamic]
+static UNIT_UNIFORM_DISTR: Uniform<f64> = Uniform::from(0.0..1.0);
 
 #[derive(Copy, Clone)]
 struct Vec3([f64; 3]);
@@ -80,6 +85,63 @@ impl Vec3 {
         let r_out_perp = etai_over_etat * (*self + cos_theta * *n);
         let r_out_parallel = -(1.0 - r_out_perp.length_squared()).abs().sqrt() * *n;
         r_out_perp + r_out_parallel
+    }
+
+    fn random_in_unit_sphere() -> Vec3 {
+        loop {
+            let mut rng = my_rng();
+            let p = Vec3::new(
+                UNIT_UNIFORM_DISTR.sample(&mut rng),
+                UNIT_UNIFORM_DISTR.sample(&mut rng),
+                UNIT_UNIFORM_DISTR.sample(&mut rng));
+            if p.length_squared() < 1. {
+                return p;
+            }
+        }
+    }
+    fn random() -> Vec3 {
+        let mut rng = my_rng();
+        Vec3::new(
+            UNIT_UNIFORM_DISTR.sample(&mut rng),
+            UNIT_UNIFORM_DISTR.sample(&mut rng),
+            UNIT_UNIFORM_DISTR.sample(&mut rng),
+        )
+    }
+
+    fn random_in_range(range: Range<f64>) -> Vec3 {
+        let mut rng = my_rng();
+        Vec3::new(
+            rng.gen_range(range.clone()),
+            rng.gen_range(range.clone()),
+            rng.gen_range(range),
+        )
+    }
+
+    fn random_in_unit_disk() -> Vec3 {
+        let mut rng = my_rng();
+        loop {
+            let p = Vec3::new(
+                UNIT_UNIFORM_DISTR.sample(&mut rng),
+                UNIT_UNIFORM_DISTR.sample(&mut rng),
+                0.);
+            if p.length_squared() < 1. {
+                return p;
+            }
+        }
+    }
+
+    fn random_unit_vector() -> Vec3 {
+        Vec3::random_in_unit_sphere().unit_vector()
+    }
+
+    #[allow(dead_code)]
+    fn random_in_hemisphere(normal: &Vec3) -> Vec3 {
+        let in_unit_sphere = Vec3::random_in_unit_sphere();
+        if Vec3::dot(&in_unit_sphere, normal) > 0. {
+            in_unit_sphere
+        } else {
+            -in_unit_sphere
+        }
     }
 }
 
@@ -231,6 +293,7 @@ impl HitRecord {
     }
 }
 
+#[auto_impl(&)]
 trait Hittable {
     fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord>;
 }
@@ -239,12 +302,6 @@ struct Sphere {
     center: Point3,
     radius: f64,
     mat: Arc<dyn Material + Sync + Send>,
-}
-
-impl Hittable for &Sphere {
-    fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
-        (*self).hit(r, t_range)
-    }
 }
 
 impl Hittable for Sphere {
@@ -269,9 +326,11 @@ impl Hittable for Sphere {
     }
 }
 
-impl Hittable for &Vec<Box<dyn Hittable + Sync>> {
+struct World(Vec<Sphere>);
+
+impl Hittable for World {
     fn hit(&self, r: &Ray, t_range: &Range<f64>) -> Option<HitRecord> {
-        self.iter()
+        self.0.iter()
             .filter_map(|hittable| hittable.hit(r, t_range))
             .min_by(|hr1, hr2| hr1.t.total_cmp(&hr2.t))
     }
@@ -282,7 +341,6 @@ fn degrees_to_radians(degrees: f64) -> f64 {
 }
 
 struct Camera {
-    caster: Raycaster,
     origin: Point3,
     lower_left_corner: Point3,
     horizontal: Vec3,
@@ -294,7 +352,7 @@ struct Camera {
 }
 
 impl Camera {
-    fn new(caster: Raycaster, look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64, aperture: f64, focus_dist: f64) -> Self {
+    fn new(look_from: Point3, look_at: Point3, vup: Vec3, vfov: f64, aspect_ratio: f64, aperture: f64, focus_dist: f64) -> Self {
         let theta = degrees_to_radians(vfov);
         let h = (theta / 2.0).tan();
         let viewport_height = 2.0 * h;
@@ -308,7 +366,6 @@ impl Camera {
         let horizontal = focus_dist * viewport_width * u;
         let vertical = focus_dist * viewport_height * v;
         Camera {
-            caster,
             origin,
             horizontal,
             vertical,
@@ -320,7 +377,7 @@ impl Camera {
         }
     }
     fn get_ray(&self, s: f64, t: f64) -> Ray {
-        let disk_pos = self.lens_radius * self.caster.random_in_unit_disk();
+        let disk_pos = self.lens_radius * Vec3::random_in_unit_disk();
         let offset = self.u * disk_pos.x() + self.v * disk_pos.y();
         Ray {
             origin: self.origin + offset,
@@ -342,14 +399,12 @@ trait Material {
 }
 
 struct Lambertian {
-    caster: Raycaster,
     albedo: Color,
 }
 
 impl Lambertian {
-    fn new(caster: Raycaster, albedo: Color) -> Self {
+    fn new(albedo: Color) -> Self {
         Lambertian {
-            caster,
             albedo,
         }
     }
@@ -357,7 +412,7 @@ impl Lambertian {
 
 impl Material for Lambertian {
     fn scatter(&self, _r_in: &Ray, rec: &HitRecord) -> Scatter {
-        let scatter_direction = rec.normal + self.caster.random_unit_vector();
+        let scatter_direction = rec.normal + Vec3::random_unit_vector();
         Scatter::Scattered {
             ray: Ray {
                 origin: rec.p,
@@ -369,16 +424,14 @@ impl Material for Lambertian {
 }
 
 struct Metal {
-    caster: Raycaster,
     albedo: Color,
     fuzz: f64,
 }
 
 impl Metal {
-    fn new(caster: Raycaster, albedo: Color, fuzz: f64) -> Self {
+    fn new(albedo: Color, fuzz: f64) -> Self {
         assert!(fuzz <= 1.);
         Metal {
-            caster,
             albedo,
             fuzz,
         }
@@ -388,7 +441,7 @@ impl Metal {
 impl Material for Metal {
     fn scatter(&self, r_in: &Ray, rec: &HitRecord) -> Scatter {
         let reflected = r_in.dir.unit_vector().reflect(&rec.normal);
-        let scattered = reflected + self.fuzz * self.caster.random_in_unit_sphere();
+        let scattered = reflected + self.fuzz * Vec3::random_in_unit_sphere();
         if Vec3::dot(&scattered, &rec.normal) <= 0. {
             Scatter::Absorbed
         } else {
@@ -451,205 +504,163 @@ impl Material for Dielectric {
     }
 }
 
-struct Raycaster {
-    unit: Uniform<f64>,
+
+fn ray_color<W: Hittable>(r: &Ray, world: W, depth: usize) -> Color {
+    if depth == 0 {
+        return COLOR_BLACK;
+    }
+    let range = 0.001f64..f64::INFINITY;
+    if let Some(rec) = world.hit(r, &range) {
+        match rec.mat.scatter(r, &rec) {
+            Scatter::Absorbed => return COLOR_BLACK,
+            Scatter::Scattered {
+                ray,
+                attenuation
+            } => {
+                return attenuation * ray_color(&ray, world, depth - 1);
+            }
+        }
+    }
+    let unit_dir = r.dir.unit_vector();
+    let t = 0.5 * (unit_dir.y() + 1.0);
+    (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
 }
 
-impl Raycaster {
-    fn new() -> Self {
-        Raycaster {
-            unit: Uniform::from(-1.0..1.0),
-        }
-    }
-    fn random_in_unit_sphere(&self) -> Vec3 {
-        loop {
-            let mut rng = my_rng();
-            let p = Vec3::new(
-                self.unit.sample(&mut rng),
-                self.unit.sample(&mut rng),
-                self.unit.sample(&mut rng));
-            if p.length_squared() < 1. {
-                return p;
-            }
-        }
-    }
-    fn random(&self) -> Vec3 {
-        let mut rng = my_rng();
-        Vec3::new(
-            self.unit.sample(&mut rng),
-            self.unit.sample(&mut rng),
-            self.unit.sample(&mut rng),
-        )
-    }
-
-    fn random_in_range(&self, range: Range<f64>) -> Vec3 {
-        let mut rng = my_rng();
-        Vec3::new(
-            my_rng().gen_range(range.clone()),
-            my_rng().gen_range(range.clone()),
-            my_rng().gen_range(range),
-        )
-    }
-
-    fn random_in_unit_disk(&self) -> Vec3 {
-        let mut rng = my_rng();
-        loop {
-            let p = Vec3::new(
-                self.unit.sample(&mut rng),
-                self.unit.sample(&mut rng),
-                0.);
-            if p.length_squared() < 1. {
-                return p;
-            }
-        }
-    }
-
-    fn random_unit_vector(&self) -> Vec3 {
-        self.random_in_unit_sphere().unit_vector()
-    }
-    #[allow(dead_code)]
-    fn random_in_hemisphere(&mut self, normal: &Vec3) -> Vec3 {
-        let in_unit_sphere = self.random_in_unit_sphere();
-        if Vec3::dot(&in_unit_sphere, normal) > 0. {
-            in_unit_sphere
-        } else {
-            -in_unit_sphere
-        }
-    }
-
-    fn ray_color<W: Hittable>(&self, r: &Ray, world: W, depth: usize) -> Color {
-        if depth == 0 {
-            return COLOR_BLACK;
-        }
-        let range = 0.001f64..f64::INFINITY;
-        if let Some(rec) = world.hit(r, &range) {
-            match rec.mat.scatter(r, &rec) {
-                Scatter::Absorbed => return COLOR_BLACK,
-                Scatter::Scattered {
-                    ray,
-                    attenuation
-                } => {
-                    return attenuation * self.ray_color(&ray, world, depth - 1);
-                }
-            }
-        }
-        let unit_dir = r.dir.unit_vector();
-        let t = 0.5 * (unit_dir.y() + 1.0);
-        (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
-    }
-
-    fn main(self: &Raycaster) {
-        // Image
-        let aspect_ratio = 3.0 / 2.0;
-        let image_width = 1200usize;
-        let image_height = (image_width as f64 / aspect_ratio) as usize;
-        let samples_per_pixel = 500;
-        let max_depth = 50;
-
-        // World
-        let world = self.random_scene();
-
-        // Camera
-        let look_from = Point3::new(13., 2., 3.);
-        let look_at = Point3::new(0., 0., 0.);
-        let focus_dist = (look_from - look_at).length();
-        let cam = Camera::new(
-            Raycaster::new(),
-            look_from,
-            look_at,
-            Vec3::new(0., 1., 0.),
-            20.,
-            aspect_ratio,
-            0.1,
-            10.,
-        );
-
-        // Render
-        rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
-        println!("P3");
-        println!("{} {}", image_width, image_height);
-        println!("{}", u8::MAX);
-        let mut output: Vec<Vec<Color>> = Vec::new();
-        output.par_extend(
-            (0..image_height).into_par_iter().rev()
+fn render(scene: Scene) {
+    let Scene {
+        target,
+        camera,
+        world,
+    } = scene;
+    // Render
+    rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
+    println!("P3");
+    println!("{} {}", target.image_width, target.image_height);
+    println!("{}", u8::MAX);
+    let mut output: Vec<Vec<Color>> = Vec::new();
+    output.par_extend(
+        (0..target.image_height).into_par_iter().rev()
             .map(|j| {
                 let mut rand = my_rng();
-                (0..image_width).into_iter().map(|i| {
+                (0..target.image_width).into_iter().map(|i| {
                     let mut pixel_color = COLOR_BLACK;
-                    for _ in 0..samples_per_pixel {
-                        let u = (i as f64 + rand.gen_range(0.0..1.0)) / (image_width - 1) as f64;
-                        let v = (j as f64 + rand.gen_range(0.0..1.0)) / (image_height - 1) as f64;
-                        let r = cam.get_ray(u, v);
-                        pixel_color += self.ray_color(&r, &world, max_depth);
+                    for _ in 0..target.samples_per_pixel {
+                        let u = (i as f64 + rand.gen_range(0.0..1.0)) / (target.image_width - 1) as f64;
+                        let v = (j as f64 + rand.gen_range(0.0..1.0)) / (target.image_height - 1) as f64;
+                        let r = camera.get_ray(u, v);
+                        pixel_color += ray_color(&r, &world, target.max_depth);
                     }
                     pixel_color
                 }).collect()
             }));
-        for line in output {
-            for pixel_color in line {
-                pixel_color.write_color(&mut stdout(), samples_per_pixel);
-            }
+    for line in output {
+        for pixel_color in line {
+            pixel_color.write_color(&mut stdout(), target.samples_per_pixel);
         }
-    }
-
-    fn random_scene(&self) -> Vec<Box<dyn Hittable + Sync>> {
-        let mut world: Vec<Box<dyn Hittable + Sync>> = Vec::new();
-        let material_ground = Arc::new(Lambertian::new(Raycaster::new(), Color::new(0.5, 0.5, 0.5)));
-        world.push(Box::new(Sphere {
-            center: Point3::new(0., -1000., 0.),
-            radius: 1000.,
-            mat: material_ground.clone(),
-        }));
-
-        for a in -11..11 {
-            for b in -11..11 {
-                let center = Point3::new(
-                    a as f64 + 0.9 * my_rng().gen_range(0.0..1.0),
-                    0.2,
-                    b as f64 + 0.9 * my_rng().gen_range(0.0..1.0));
-                if (center - Point3::new(4.,0.2, 0.)).length() < 0.9 {
-                    continue;
-                }
-                let sphere_material: Arc<dyn Material + Sync + Send> = match my_rng().gen_range::<f64, Range<f64>>(0.0..1.0) {
-                    f if f < 0.8 =>  {
-                        let albedo =  self.random() * self.random();
-                        Arc::new(Lambertian::new(Raycaster::new(), albedo))
-                    },
-                    f if f < 0.95 => {
-                        let albedo = self.random_in_range(0.5..1.0);
-                        let fuzz = my_rng().gen_range(0.0..0.5);
-                        Arc::new(Metal::new(Raycaster::new(), albedo, fuzz))
-                    },
-                    _ => {
-                        Arc::new(Dielectric::new(1.5))
-                    },
-                };
-                world.push(Box::new(Sphere {
-                    center,
-                    radius: 0.2,
-                    mat: sphere_material
-                }))
-            }
-        }
-        world.push(Box::new(Sphere{
-            center: Point3::new(0.,1.,0.),
-            radius: 1.0,
-            mat: Arc::new( Dielectric::new(1.5)),
-        }));
-        world.push(Box::new(Sphere{
-            center: Point3::new(-4.,1.,0.),
-            radius: 1.0,
-            mat: Arc::new( Lambertian::new(Raycaster::new(), Color::new(0.4, 0.2, 0.1))),
-        }));
-        world.push(Box::new(Sphere{
-            center: Point3::new(4.,1.,0.),
-            radius: 1.0,
-            mat: Arc::new( Metal::new(Raycaster::new(), Color::new(0.7,0.6,0.5), 0.0)),
-        }));
-        world
     }
 }
 
+
+fn random_scene() -> Scene {
+    // Image
+    let aspect_ratio = 3.0 / 2.0;
+    let image_width = 60usize;
+
+    let target = RenderTarget {
+        image_width,
+        image_height: (image_width as f64 / aspect_ratio) as usize,
+        samples_per_pixel: 4,
+        max_depth: 50,
+    };
+
+    // Camera
+    let look_from = Point3::new(13., 2., 3.);
+    let look_at = Point3::new(0., 0., 0.);
+    let focus_dist = (look_from - look_at).length();
+    let cam = Camera::new(
+        look_from,
+        look_at,
+        Vec3::new(0., 1., 0.),
+        20.,
+        aspect_ratio,
+        0.1,
+        10.,
+    );
+
+    let mut world = Vec::new();
+    let material_ground = Arc::new(Lambertian::new(Color::new(0.5, 0.5, 0.5)));
+    world.push(Sphere {
+        center: Point3::new(0., -1000., 0.),
+        radius: 1000.,
+        mat: material_ground.clone(),
+    });
+
+    for a in -11..11 {
+        for b in -11..11 {
+            let center = Point3::new(
+                a as f64 + 0.9 * my_rng().gen_range(0.0..1.0),
+                0.2,
+                b as f64 + 0.9 * my_rng().gen_range(0.0..1.0));
+            if (center - Point3::new(4., 0.2, 0.)).length() < 0.9 {
+                continue;
+            }
+            let sphere_material: Arc<dyn Material + Sync + Send> = match my_rng().gen_range::<f64, Range<f64>>(0.0..1.0) {
+                f if f < 0.8 => {
+                    let albedo = Vec3::random() * Vec3::random();
+                    Arc::new(Lambertian::new( albedo))
+                }
+                f if f < 0.95 => {
+                    let albedo = Vec3::random_in_range(0.5..1.0);
+                    let fuzz = my_rng().gen_range(0.0..0.5);
+                    Arc::new(Metal::new(albedo, fuzz))
+                }
+                _ => {
+                    Arc::new(Dielectric::new(1.5))
+                }
+            };
+            world.push(Sphere {
+                center,
+                radius: 0.2,
+                mat: sphere_material,
+            })
+        }
+    }
+    world.push(Sphere {
+        center: Point3::new(0., 1., 0.),
+        radius: 1.0,
+        mat: Arc::new(Dielectric::new(1.5)),
+    });
+    world.push(Sphere {
+        center: Point3::new(-4., 1., 0.),
+        radius: 1.0,
+        mat: Arc::new(Lambertian::new( Color::new(0.4, 0.2, 0.1))),
+    });
+    world.push(Sphere {
+        center: Point3::new(4., 1., 0.),
+        radius: 1.0,
+        mat: Arc::new(Metal::new(Color::new(0.7, 0.6, 0.5), 0.0)),
+    });
+
+    Scene {
+        target,
+        camera: cam,
+        world: World(world),
+    }
+}
+
+struct Scene {
+    target: RenderTarget,
+    camera: Camera,
+    world: World,
+}
+
+struct RenderTarget {
+    image_width: usize,
+    image_height: usize,
+    samples_per_pixel: usize,
+    max_depth: usize,
+}
+
 fn main() {
-    Arc::new(Raycaster::new()).main()
+    render(random_scene());
 }

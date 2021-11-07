@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 rand = { version = "0.8.4", features = ["small_rng"] }
 rayon = "1.5.1"
+auto_impl = "0.5.0"
+static_init = "1.0.1"
 
 [profile.release]
 debug = true
