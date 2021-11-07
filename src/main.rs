@@ -4,7 +4,7 @@ mod rng;
 
 use std::ops::{Neg, Index, AddAssign, MulAssign, DivAssign, IndexMut, Add, Sub, Mul, Div, Range};
 use std::fmt::{Display, Formatter};
-use std::io::{stdout, Write};
+use std::io::{stdout, Write, BufWriter};
 use rand::distributions::Uniform;
 use rand::distributions::Distribution;
 use rayon::prelude::*;
@@ -13,6 +13,7 @@ use crate::rng::my_rng;
 use rand::Rng;
 use auto_impl::auto_impl;
 use static_init::dynamic;
+use std::fs::File;
 
 #[dynamic]
 static UNIT_UNIFORM_DISTR: Uniform<f64> = Uniform::from(0.0..1.0);
@@ -206,6 +207,14 @@ impl Mul<Vec3> for Vec3 {
     }
 }
 
+impl MulAssign<Vec3> for Vec3 {
+    fn mul_assign(&mut self, rhs: Vec3) {
+        self.0[0] = self.0[0] * rhs.0[0];
+        self.0[1] = self.0[1] * rhs.0[1];
+        self.0[2] = self.0[2] * rhs.0[2];
+    }
+}
+
 impl Mul<Vec3> for f64 {
     type Output = Vec3;
 
@@ -257,6 +266,7 @@ impl Display for Vec3 {
 type Point3 = Vec3;
 type Color = Vec3;
 
+#[derive(Copy, Clone)]
 struct Ray {
     origin: Point3,
     dir: Vec3,
@@ -505,25 +515,29 @@ impl Material for Dielectric {
 }
 
 
-fn ray_color<W: Hittable>(r: &Ray, world: W, depth: usize) -> Color {
-    if depth == 0 {
-        return COLOR_BLACK;
-    }
+fn ray_color<W: Hittable>(mut r: Ray, world: W, depth: usize) -> Color {
     let range = 0.001f64..f64::INFINITY;
-    if let Some(rec) = world.hit(r, &range) {
-        match rec.mat.scatter(r, &rec) {
-            Scatter::Absorbed => return COLOR_BLACK,
-            Scatter::Scattered {
-                ray,
-                attenuation
-            } => {
-                return attenuation * ray_color(&ray, world, depth - 1);
+    let mut scattered_attenuation = COLOR_WHITE;
+    for _ in 0..depth {
+        if let Some(rec) = world.hit(&r, &range) {
+            match rec.mat.scatter(&r, &rec) {
+                Scatter::Absorbed => return COLOR_BLACK,
+                Scatter::Scattered {
+                    ray,
+                    attenuation
+                } => {
+                    r = ray;
+                    scattered_attenuation *= attenuation;
+                }
             }
+        } else {
+            let unit_dir = r.dir.unit_vector();
+            let t = 0.5 * (unit_dir.y() + 1.0);
+            let light = (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0);
+            return scattered_attenuation * light;
         }
     }
-    let unit_dir = r.dir.unit_vector();
-    let t = 0.5 * (unit_dir.y() + 1.0);
-    (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0)
+    COLOR_BLACK
 }
 
 fn render(scene: Scene) {
@@ -534,9 +548,7 @@ fn render(scene: Scene) {
     } = scene;
     // Render
     rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
-    println!("P3");
-    println!("{} {}", target.image_width, target.image_height);
-    println!("{}", u8::MAX);
+
     let mut output: Vec<Vec<Color>> = Vec::new();
     output.par_extend(
         (0..target.image_height).into_par_iter().rev()
@@ -548,14 +560,18 @@ fn render(scene: Scene) {
                         let u = (i as f64 + rand.gen_range(0.0..1.0)) / (target.image_width - 1) as f64;
                         let v = (j as f64 + rand.gen_range(0.0..1.0)) / (target.image_height - 1) as f64;
                         let r = camera.get_ray(u, v);
-                        pixel_color += ray_color(&r, &world, target.max_depth);
+                        pixel_color += ray_color(r, &world, target.max_depth);
                     }
                     pixel_color
                 }).collect()
             }));
+    let mut file = BufWriter::new(File::create("image.ppm").unwrap());
+    writeln!(file, "P3").unwrap();
+    writeln!(file, "{} {}", target.image_width, target.image_height).unwrap();
+    writeln!(file, "{}", u8::MAX).unwrap();
     for line in output {
         for pixel_color in line {
-            pixel_color.write_color(&mut stdout(), target.samples_per_pixel);
+            pixel_color.write_color(&mut file, target.samples_per_pixel);
         }
     }
 }
@@ -564,19 +580,19 @@ fn render(scene: Scene) {
 fn random_scene() -> Scene {
     // Image
     let aspect_ratio = 3.0 / 2.0;
-    let image_width = 60usize;
+    let image_width = 1200usize;
 
     let target = RenderTarget {
         image_width,
         image_height: (image_width as f64 / aspect_ratio) as usize,
-        samples_per_pixel: 4,
+        samples_per_pixel: 500,
         max_depth: 50,
     };
 
     // Camera
     let look_from = Point3::new(13., 2., 3.);
     let look_at = Point3::new(0., 0., 0.);
-    let focus_dist = (look_from - look_at).length();
+    let _focus_dist = (look_from - look_at).length();
     let cam = Camera::new(
         look_from,
         look_at,
@@ -607,7 +623,7 @@ fn random_scene() -> Scene {
             let sphere_material: Arc<dyn Material + Sync + Send> = match my_rng().gen_range::<f64, Range<f64>>(0.0..1.0) {
                 f if f < 0.8 => {
                     let albedo = Vec3::random() * Vec3::random();
-                    Arc::new(Lambertian::new( albedo))
+                    Arc::new(Lambertian::new(albedo))
                 }
                 f if f < 0.95 => {
                     let albedo = Vec3::random_in_range(0.5..1.0);
@@ -633,7 +649,7 @@ fn random_scene() -> Scene {
     world.push(Sphere {
         center: Point3::new(-4., 1., 0.),
         radius: 1.0,
-        mat: Arc::new(Lambertian::new( Color::new(0.4, 0.2, 0.1))),
+        mat: Arc::new(Lambertian::new(Color::new(0.4, 0.2, 0.1))),
     });
     world.push(Sphere {
         center: Point3::new(4., 1., 0.),

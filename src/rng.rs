@@ -15,7 +15,7 @@ thread_local!(
     // We require Rc<..> to avoid premature freeing when thread_rng is used
     // within thread-local destructors. See #968.
     static THREAD_RNG_KEY: Rc<UnsafeCell<SmallRng>> = {
-        let rng = SmallRng::from_entropy();
+        let rng = SmallRng::from_seed([0u8;32]);
         Rc::new(UnsafeCell::new(rng))
     }
 );
