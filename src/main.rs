@@ -531,10 +531,23 @@ fn ray_color<W: Hittable>(mut r: Ray, world: W, depth: usize) -> Color {
                 }
             }
         } else {
-            let unit_dir = r.dir.unit_vector();
-            let t = 0.5 * (unit_dir.y() + 1.0);
-            let light = (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0);
-            return scattered_attenuation * light;
+
+            // let unit_dir = r.dir.unit_vector();
+            // let t = 0.5 * (unit_dir.y() + 1.0);
+            // let light = (1.0 - t) * COLOR_WHITE + t * Color::new(0.5, 0.7, 1.0);
+            // return scattered_attenuation * light;
+
+            let plane_normal = Vec3::new(-1.,0., 0.);
+            let p0 = Point3::new(100., 0., 0.);
+            if r.dir.dot(&plane_normal) != 0. {
+                let d = ((p0 - r.origin).dot(&plane_normal)) / r.dir.dot(&plane_normal);
+                let p = r.origin + r.dir * d;
+                if d < 0. && p.y().abs() < 100. && p.z().abs() < 100. {
+                    // let distance_squared = (p - r.origin).length_squared();
+                    return scattered_attenuation * COLOR_WHITE
+                }
+            }
+            return COLOR_BLACK
         }
     }
     COLOR_BLACK
@@ -547,7 +560,7 @@ fn render(scene: Scene) {
         world,
     } = scene;
     // Render
-    rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
+    // rayon::ThreadPoolBuilder::new().num_threads(6).build_global().unwrap();
 
     let mut output: Vec<Vec<Color>> = Vec::new();
     output.par_extend(
@@ -580,12 +593,12 @@ fn render(scene: Scene) {
 fn random_scene() -> Scene {
     // Image
     let aspect_ratio = 3.0 / 2.0;
-    let image_width = 1200usize;
+    let image_width = 400usize;
 
     let target = RenderTarget {
         image_width,
         image_height: (image_width as f64 / aspect_ratio) as usize,
-        samples_per_pixel: 500,
+        samples_per_pixel: 10,
         max_depth: 50,
     };
 
